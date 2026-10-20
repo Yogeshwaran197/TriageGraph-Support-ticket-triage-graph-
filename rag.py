@@ -20,14 +20,14 @@ def document_loader(path):
     loader = PyPDFLoader(path)
     try:
         docs =  loader.load()
-        print(f"Length of page : {docs}")
+        print(f"Length of page : {len(docs)}")
         splitter =  RecursiveCharacterTextSplitter(
             chunk_size = 1000,
             chunk_overlap =  100
         )
 
         chunks = splitter.split_documents(docs)
-        print(f"Length of chunk : {chunks}")
+        print(f"Length of chunk : {len(chunks)}")
     except Exception as e:
         raise ValueError("Error while loading documents")
     
@@ -38,7 +38,7 @@ def document_loader(path):
 path  =  input("Enter the path of policy pdf : ")
 docs =document_loader(path)
 
-def hybrid_search(doc : str):
+def hybrid_search(docs : str):
 
     try:
         vectorstore = Chroma.from_documents(
