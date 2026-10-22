@@ -43,3 +43,13 @@ class AgentState(TypedDict):
     draft : str
     approval : Literal["approve", "edit", "reject"]
     retry_count: int
+
+
+llm = ChatGroq(
+    model = "openai/gpt-oss-20b",
+    groq_api_key = os.getenv("GROQ_API_KEY")
+)
+
+
+
+
