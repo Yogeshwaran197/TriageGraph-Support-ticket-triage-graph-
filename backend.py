@@ -1,4 +1,5 @@
 
+from torch._inductor.select_algorithm import _classify_kernel_operation
 import os
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
@@ -24,7 +25,7 @@ class ticket(BaseModel):
     ticket_id: int = Field(..., description="Unique numeric ID of the support ticket, e.g. 1042. Used to look up the ticket record.")
     ticket_text : str = Field(description="The customer's original message describing their problem. Pass it verbatim, without summarizing or editing.")
 
-class category(BaseModel):
+class classify_schema(BaseModel):
     category: Literal["billing", "technical", "account", "shipping", "general"] = Field(
     description=(
         "Category assigned to the ticket after classification. One of: "
@@ -38,7 +39,7 @@ class category(BaseModel):
 
 class AgentState(TypedDict):
     ticket :ticket
-    category : category
+    category : classify_schema
     retrived_context : str
     draft : str
     approval : Literal["approve", "edit", "reject"]
@@ -50,6 +51,6 @@ llm = ChatGroq(
     groq_api_key = os.getenv("GROQ_API_KEY")
 )
 
-
+classifer_llm =  llm.with_structured_output(classify_schema)
 
 
