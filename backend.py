@@ -1,4 +1,6 @@
 
+from sqlalchemy.dialects.postgresql import psycopg2
+from sqlalchemy.dialects.postgresql import psycopg
 import os
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
@@ -6,7 +8,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_core.prompts import MessagesPlaceholder
 from langchain_core.output_parsers import StrOutputParser
-from langgraph.graph import StateGraph
+from langgraph.graph import StateGraph, END, START
 from langgraph.types import Command, interrupt
 from langgraph.checkpoint.postgres import PostgresSaver
 from rag import docs
@@ -21,6 +23,10 @@ load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 if not GROQ_API_KEY:
     raise ValueError("Invalid Groq API key")
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise ValueError("Invalid database url")
 
 
 class ticket(BaseModel):
@@ -99,6 +105,7 @@ def classifer_node(state : AgentState) -> Dict:
     return {
         "category" : category
     }
+    
 
 def write_query(state : AgentState ) -> Dict:
 
@@ -333,10 +340,56 @@ def should_continue_approval(state : AgentState) -> Dict:
 
     
 
+graph =  StateGraph(AgentState)
+
+#nodes
+graph.add_node("Classifier", classifer_node)
+graph.add_node("Query_writer", write_query)
+graph.add_node("Retriever",  retriever)
+graph.add_node("Drafter",  draft_node)
+graph.add_node("Grader", grader)
+graph.add_node("Human_Approval", approval_node)
+
+#connecting nodes
+
+graph.add_edge(START,  "Classifier")
+graph.add_edge("Classifer", "Query_writer")
+graph.add_edge("Query_writer", "Retriever")
+graph.add_edge("Retriever", "Drafter")
+
+graph.add_conditional_edges(
+    "Drafter",
+    should_continue,
+    {
+       "draft" : "Drafter",
+       "grader"  : "Grader"
+    }
+)
+
+graph.add_conditional_edges(
+    "Grader",
+    should_continue_approval,
+    {
+        "end" : END,
+        "draft" : "Drafter"
+    }
+)
+
+conn =  psycopg.connect(
+    DATABASE_URL,
+    row_factory = dict_row,
+    autocommit = True
+)      
+
+checkpointer = PostgresSaver(conn)
+checkpointer.setup()
+
+TicketAgent = graph.compile(checkpointer=checkpointer)
 
 
 
-    
+
+
 
 
 
