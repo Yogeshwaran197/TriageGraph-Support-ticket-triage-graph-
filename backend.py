@@ -1,5 +1,4 @@
 
-from torch._inductor.select_algorithm import _classify_kernel_operation
 import os
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
@@ -10,6 +9,8 @@ from langchain_core.output_parsers import StrOutputParser
 from langgraph.graph import StateGraph
 from langgraph.types import Command, interrupt
 from langgraph.checkpoint.postgres import PostgresSaver
+from rag import docs
+from rag import hybrid_search
 from typing import TypedDict, Dict, Literal
 from pydantic import BaseModel, Field
 from psycopg import connect
@@ -136,6 +137,27 @@ def write_query(state : AgentState ) -> Dict:
     return {
         "query" : query
     }
+
+def retriever(state : AgentState) -> Dict:
+
+    query  =  state['query']
+
+    #retriver that we coded on rag.py(hybrid search)
+    retriever =  hybrid_search(docs)
+
+    #invoking for generated query
+    result =  retriever.invoke(query)
+
+    #combining all the retrived results into one big context
+    context =  "\n\n".join(result)
+
+    return {
+        "retrived_context" : context
+    }
+
+
+
+
 
 
 
