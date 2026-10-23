@@ -49,6 +49,7 @@ class AgentState(TypedDict):
     grade_score : bool
     approval : Literal["approve", "edit", "reject"]
     retry_count: int
+    final : str
 
 
 llm = ChatGroq(
@@ -283,7 +284,7 @@ def grader(state : AgentState) -> Dict:
 
 def should_continue(state : AgentState) -> Dict:
 
-    count = state['retry_count']
+    count = state.get("retry_count", 0) +1
     grader = state['grader']
 
     if not grader and count <= 3:
@@ -292,8 +293,43 @@ def should_continue(state : AgentState) -> Dict:
         return "approval_node"    
 
 
+def approval_node(state : AgentState) -> Dict:
+
+    ticket = state['ticket']
+    approval = state['approval']
+
+    approval = interrupt({
+        "action" : "draft email",
+        "ticket" : ticket,
+        "approval" : approval
+    })
+
+    if approval.lower().strip() == "approve":
+        return {
+            "final" : state["draft"]
+        }
+    elif approval.lower().strip() == "reject":
+        final = "User rejected the request, so I can't draft email"
+        return {
+            "final" : final
+        }
+    else:
+        feedback = input("Feedback : ")
+        return {
+            "feedback" : feedback
+        }
 
 
+def should_continue_approval(state : AgentState) -> Dict:
+
+    approval = state[approval].lower().strip() 
+    retry_count =  state["retry_count"]
+
+    if approval == "approve":
+        return "end"
+    elif approval in ("edit", "reject") and retry_count < 3:
+        return "draft"
+   
 
     
 
