@@ -1,7 +1,9 @@
 
-from sqlalchemy.dialects.postgresql import psycopg2
-from sqlalchemy.dialects.postgresql import psycopg
+from torch._inductor.cudagraph_utils import InputStorageMutationInfo
+from cohere.types import classify_response_classifications_item_labels_value
 import os
+import uuid
+import psycopg
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
@@ -105,7 +107,7 @@ def classifer_node(state : AgentState) -> Dict:
     return {
         "category" : category
     }
-    
+
 
 def write_query(state : AgentState ) -> Dict:
 
@@ -385,6 +387,54 @@ checkpointer = PostgresSaver(conn)
 checkpointer.setup()
 
 TicketAgent = graph.compile(checkpointer=checkpointer)
+
+if __name__ == "__main__":
+
+    
+    while True:
+
+        config =  {
+        "configurable" :  {
+                "thread_id" : str(uuid.uuid4())
+        }}
+
+        user_ticket = input(f"Enter your ticket (ticker-id{config['thread_id']}) : ")
+
+
+        if user_ticket.lower() in {"exit", "quit", "q"}:
+            break
+        if not user_ticket:
+            continue
+
+        inputs = {
+        "ticket": user_ticket,
+        "category": "",
+        "query": "",
+        "retrieved_context": "",
+        "draft": "",
+        "feedback": "",
+        "grade_score": "",
+        "approval": "",
+        "retry_count": 0,
+        "final": "",
+    }
+
+        while True:
+
+            result = TicketAgent.invoke(
+                inputs,
+                config=config
+            )
+
+            if "__interrupt__" not in result:
+                print("\n" + result["generation"])
+                break  # exits INNER loop only, so the outer loop asks the next question
+
+            
+
+
+
+
 
 
 
