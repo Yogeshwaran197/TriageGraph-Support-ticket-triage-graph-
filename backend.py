@@ -1,6 +1,3 @@
-
-from torch._inductor.cudagraph_utils import InputStorageMutationInfo
-from cohere.types import classify_response_classifications_item_labels_value
 import os
 import uuid
 import psycopg
@@ -48,20 +45,20 @@ class classify_schema(BaseModel):
 )
 
 class AgentState(TypedDict):
-    ticket :ticket
-    category : str
-    query : str
-    retrived_context : str
-    draft : str
-    feedback : str
-    grade_score : bool
-    approval : Literal["approve", "edit", "reject"]
+    ticket: str
+    category: str
+    query: str
+    retrieved_context: str
+    draft: str
+    feedback: str
+    grader: bool
+    approval: str
     retry_count: int
-    final : str
-
+    edit_count: int
+    final: str
 
 llm = ChatGroq(
-    model = "openai/gpt-oss-20b",
+    model = "qwen/qwen3.8-27b",
     groq_api_key = os.getenv("GROQ_API_KEY")
 )
 
@@ -95,17 +92,17 @@ def classifer_node(state : AgentState) -> Dict:
 
     prompt =  ChatPromptTemplate.from_messages([
         ("system" , CLASSIFIER_PROMPT),
-        ("user", "/n Ticket : {ticket}")
+        ("user", "\n Ticket : {ticket}")
     ])
 
-    chain =  prompt | classifer_llm | StrOutputParser()
+    chain =  prompt | classifer_llm 
 
-    category = chain.invoke({
-        "ticket" : {ticket}
+    result = chain.invoke({
+        "ticket" : ticket
     })
 
     return {
-        "category" : category
+        "category" : result.category
     }
 
 
@@ -161,10 +158,10 @@ def retriever(state : AgentState) -> Dict:
     result =  retriever.invoke(query)
 
     #combining all the retrived results into one big context
-    context =  "\n\n".join(result)
+    context = "\n\n".join(doc.page_content for doc in result)
 
     return {
-        "retrived_context" : context
+        "retrieved_context" : context
     }
 
 class DraftEmail(BaseModel):
@@ -207,32 +204,35 @@ def draft_node(state : AgentState) -> Dict:
 
     prompt = ChatPromptTemplate.from_messages([
         ("system",  DRAFT_EMAIL_PROMPT),
-        ("user", "Here \n ticket : {ticker} \n category : {category} : context : {context} \n feedback : {feedback} ")
+        ("user", "Here \n ticket : {ticket} \n category : {category} : context : {context} \n feedback : {feedback} ")
     ])
 
-    chain =  prompt | Draft_llm | StrOutputParser
+    chain =  prompt | Draft_llm 
 
     draft = chain.invoke({
         "ticket" : state['ticket'],
         "category" : state['category'],
-        "context" : state['retrived_context'],
+        "context" : state['retrieved_context'],
         "feedback" : state['feedback']
     })
 
+    draft_text = f"Subject: {draft.subject}\n\n{draft.body}"
+
     return {
-        "draft" : draft
+        "draft": draft_text,
+        "retry_count": state.get("retry_count", 0) + 1,
     }
 
-class Grader(BaseModel):
+class grader_schema(BaseModel):
     grade: Literal["yes", "no"] = Field(
         ...,
         description="'yes' if the draft is relevant to the ticket and category, grounded in the context, actionable, and well-toned; otherwise 'no'."
     )
 
-grader_llm =  llm.with_structured_output(Grader)
+grader_llm =  llm.with_structured_output(grader_schema)
 
 
-def grader(state : AgentState) -> Dict:
+def grader_node(state : AgentState) -> Dict:
 
     GRADER_PROMPT = """You are a quality reviewer for customer support emails.
 
@@ -271,12 +271,12 @@ def grader(state : AgentState) -> Dict:
         ("user", "Here \n ticket : {ticket} \n category : {category} : context : {context} \n draft : {draft}")
     ])
 
-    chain =  prompt | Draft_llm | StrOutputParser
+    chain =  prompt | grader_llm 
 
     grader = chain.invoke({
         "ticket" : state['ticket'],
         "category" : state['category'],
-        "context" : state['retrived_context'],
+        "context" : state['retrieved_context'],
         "draft" : state['draft']
     })
 
@@ -291,56 +291,33 @@ def grader(state : AgentState) -> Dict:
         }
 
 
-def should_continue(state : AgentState) -> Dict:
-
-    count = state.get("retry_count", 0) +1
-    grader = state['grader']
-
-    if not grader and count <= 3:
+def should_continue(state: AgentState) -> str:
+    if not state["grader"] and state["retry_count"] < 3:
         return "draft"
-    else:
-        return "approval_node"    
+    return "approval"
 
 
-def approval_node(state : AgentState) -> Dict:
+def approval_node(state: AgentState) -> Dict:
+    response = interrupt({"draft": state["draft"], "ticket": state["ticket"]})
+    decision = response["decision"].lower().strip()
 
-    ticket = state['ticket']
-    approval = state['approval']
+    if decision == "approve":
+        return {"approval": "approve", "final": state["draft"]}
+    if decision == "reject":
+        return {"approval": "reject", "final": "User rejected the request."}
+    if state.get("edit_count", 0) >= 3:
+        return {"approval": "edit", "final": "Edit limit reached. Last draft:\n\n" + state["draft"]}
+    return {
+        "approval": "edit",
+        "feedback": response.get("feedback", ""),
+        "edit_count": state.get("edit_count", 0) + 1,
+        "retry_count": 0,
+    }
 
-    approval = interrupt({
-        "action" : "draft email",
-        "ticket" : ticket,
-        "approval" : approval
-    })
-
-    if approval.lower().strip() == "approve":
-        return {
-            "final" : state["draft"]
-        }
-    elif approval.lower().strip() == "reject":
-        final = "User rejected the request, so I can't draft email"
-        return {
-            "final" : final
-        }
-    else:
-        feedback = input("Feedback : ")
-        return {
-            "feedback" : feedback
-        }
-
-
-def should_continue_approval(state : AgentState) -> Dict:
-
-    approval = state[approval].lower().strip() 
-    retry_count =  state["retry_count"]
-
-    if approval == "approve":
-        return "end"
-    elif approval in ("edit", "reject") and retry_count < 3:
+def should_continue_approval(state: AgentState) -> str:
+    if state["approval"] == "edit" and not state["final"]:
         return "draft"
-   
-
-    
+    return "end"
 
 graph =  StateGraph(AgentState)
 
@@ -349,31 +326,33 @@ graph.add_node("Classifier", classifer_node)
 graph.add_node("Query_writer", write_query)
 graph.add_node("Retriever",  retriever)
 graph.add_node("Drafter",  draft_node)
-graph.add_node("Grader", grader)
+graph.add_node("Grader", grader_node)
 graph.add_node("Human_Approval", approval_node)
 
 #connecting nodes
 
 graph.add_edge(START,  "Classifier")
-graph.add_edge("Classifer", "Query_writer")
+graph.add_edge("Classifier", "Query_writer")
 graph.add_edge("Query_writer", "Retriever")
 graph.add_edge("Retriever", "Drafter")
 
+graph.add_edge("Drafter", "Grader")
+
 graph.add_conditional_edges(
-    "Drafter",
+    "Grader",
     should_continue,
     {
-       "draft" : "Drafter",
-       "grader"  : "Grader"
+        "draft" : "Drafter",
+        "approval" : "Human_Approval"
     }
 )
 
 graph.add_conditional_edges(
-    "Grader",
+    "Human_Approval",
     should_continue_approval,
     {
-        "end" : END,
-        "draft" : "Drafter"
+         "end" : END,
+         "draft" : "Drafter"
     }
 )
 
@@ -398,7 +377,7 @@ if __name__ == "__main__":
                 "thread_id" : str(uuid.uuid4())
         }}
 
-        user_ticket = input(f"Enter your ticket (ticker-id{config['thread_id']}) : ")
+        user_ticket = input(f"Enter your ticket (ticket-id {config['configurable']['thread_id']}) : ")
 
 
         if user_ticket.lower() in {"exit", "quit", "q"}:
@@ -407,17 +386,18 @@ if __name__ == "__main__":
             continue
 
         inputs = {
-        "ticket": user_ticket,
-        "category": "",
-        "query": "",
-        "retrieved_context": "",
-        "draft": "",
-        "feedback": "",
-        "grade_score": "",
-        "approval": "",
-        "retry_count": 0,
-        "final": "",
-    }
+            "ticket": user_ticket,
+            "category": "",
+            "query": "",
+            "retrieved_context": "",
+            "draft": "",
+            "feedback": "",
+            "grader": False,
+            "approval": "",
+            "retry_count": 0,
+            "edit_count": 0,
+            "final": "",
+        }
 
         while True:
 
@@ -431,8 +411,12 @@ if __name__ == "__main__":
                 break 
 
             payload = result['__interrupt__'][0].value
-            choose = print("approve/edit/reject the draft? ") 
-            inputs = Command(resume=choose)
+            print("\n--- DRAFT ---\n" + payload["draft"])
+
+
+            decision = input("\napprove/edit/reject the draft? ").strip().lower()
+            feedback = input("what should change? ") if decision == "edit" else "" 
+            inputs = Command(resume={"decision": decision, "feedback": feedback})
         
 
 
