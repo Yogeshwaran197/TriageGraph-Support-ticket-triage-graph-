@@ -427,8 +427,14 @@ if __name__ == "__main__":
             )
 
             if "__interrupt__" not in result:
-                print("\n" + result["generation"])
-                break  # exits INNER loop only, so the outer loop asks the next question
+                print("\n" + result["final"])
+                break 
+
+            payload = result['__interrupt__'][0].value
+            choose = print("approve/edit/reject the draft? ") 
+            inputs = Command(resume=choose)
+        
+
 
             
 
