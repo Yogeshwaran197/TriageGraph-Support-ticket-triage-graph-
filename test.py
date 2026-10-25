@@ -13,7 +13,7 @@ if __name__ == "__main__":
         results = retriever.invoke(user_input)
 
         for i, doc in enumerate(results):
-            score = doc.metadata.get("relevence_score")
+            score = doc.metadata.get("relevance_score")
             print(f"\n result - {i+1} | Score - {score}")
             content = doc.page_content[:300]
             print(f"\n content : {content} ")
